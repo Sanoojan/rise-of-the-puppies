@@ -2,7 +2,7 @@ import torch, torchvision
 
 # Import some common libraries
 import numpy as np
-import os, json, cv2, random
+import sys, os, json, cv2, random
 
 # Import some common detectron2 utilities
 import detectron2
@@ -27,6 +27,8 @@ iSAID_DATASET_PATH="/apps/local/shared/CV703/datasets/iSAID/iSAID_patches"  # Pa
 
 if not os.path.exists(OUTPUT_DIRECTORY):
     os.makedirs(OUTPUT_DIRECTORY)
+else:
+    raise Exception(" Direcrtory Exists ... !!!")
 
 setup_logger(f"{OUTPUT_DIRECTORY}/log.txt")
 
@@ -59,6 +61,8 @@ def prepare_config(config_path, **kwargs):
     cfg.DATALOADER.NUM_WORKERS = 16
 
     cfg.MODEL.ROI_HEADS.NUM_CLASSES = 15
+    cfg.MODEL.WEIGHTS = model_zoo.get_checkpoint_url("COCO-Detection/faster_rcnn_R_50_FPN_1x.yaml")
+
     # Training schedule - equivalent to 0.25x schedule as per Detectron2 criteria
     cfg.SOLVER.IMS_PER_BATCH = 4
     cfg.SOLVER.BASE_LR = 0.01

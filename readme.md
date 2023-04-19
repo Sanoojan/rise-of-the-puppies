@@ -1,4 +1,6 @@
 
 
 ## Installations
-python -m pip install -e Detectron2-modif
+
+Optional Not enntirely needed
+`python -m pip install -e Detectron2-modif`
