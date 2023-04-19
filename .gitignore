@@ -1,11 +1,14 @@
 .vscode
 __pycache__
+build
+
 *.ipynb
 
 configs/*
 weights/*
 hypotheses/*
 todo.txt
+OUTPUT/*
 
 !README.md
 !readme.md
