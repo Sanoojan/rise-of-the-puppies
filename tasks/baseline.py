@@ -17,10 +17,11 @@ from detectron2.data.datasets import register_coco_instances
 from detectron2.checkpoint import DetectionCheckpointer
 from detectron2.evaluation import (COCOEvaluator, DatasetEvaluators)
 
+# import detectron2.modeling.backbone.acmix_resnet
 
 ##======================= Setup ================================================
 
-OUTPUT_DIRECTORY="OUTPUT/ResNet50FPN_iSAID/"  # The output directory to save logs and checkpoints
+OUTPUT_DIRECTORY="OUTPUT/ResNet50FPN_EXPER/"  # The output directory to save logs and checkpoints
 CONFIG_FILE_PATH="COCO-Detection/faster_rcnn_R_50_FPN_1x.yaml"  # The detectron2 config file for R50-FPN Faster-RCNN
 
 iSAID_DATASET_PATH="/apps/local/shared/CV703/datasets/iSAID/iSAID_patches"  # Path to iSAID dataset
@@ -28,7 +29,8 @@ iSAID_DATASET_PATH="/apps/local/shared/CV703/datasets/iSAID/iSAID_patches"  # Pa
 if not os.path.exists(OUTPUT_DIRECTORY):
     os.makedirs(OUTPUT_DIRECTORY)
 else:
-    raise Exception(f"Direcrtory Exists ... !!! {OUTPUT_DIRECTORY}")
+    pass
+    # raise Exception(f"Direcrtory Exists ... !!! {OUTPUT_DIRECTORY}")
 
 setup_logger(f"{OUTPUT_DIRECTORY}/log.txt")
 
@@ -60,6 +62,7 @@ def prepare_config(config_path, **kwargs):
     cfg.DATASETS.TEST = ("iSAID_val",)
     cfg.DATALOADER.NUM_WORKERS = 16
 
+    cfg.MODEL.BACKBONE.NAME = "build_acmix_resnet_fpn_backbone"
     cfg.MODEL.ROI_HEADS.NUM_CLASSES = 15
     cfg.MODEL.WEIGHTS = model_zoo.get_checkpoint_url("COCO-Detection/faster_rcnn_R_50_FPN_1x.yaml")
 
