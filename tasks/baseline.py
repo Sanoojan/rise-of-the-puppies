@@ -28,7 +28,7 @@ iSAID_DATASET_PATH="/apps/local/shared/CV703/datasets/iSAID/iSAID_patches"  # Pa
 if not os.path.exists(OUTPUT_DIRECTORY):
     os.makedirs(OUTPUT_DIRECTORY)
 else:
-    raise Exception(" Direcrtory Exists ... !!!")
+    raise Exception(f"Direcrtory Exists ... !!! {OUTPUT_DIRECTORY}")
 
 setup_logger(f"{OUTPUT_DIRECTORY}/log.txt")
 
