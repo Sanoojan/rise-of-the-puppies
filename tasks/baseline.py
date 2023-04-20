@@ -2,7 +2,8 @@ import torch, torchvision
 
 # Import some common libraries
 import numpy as np
-import sys, os, json, cv2, random
+import sys, os, json, cv2
+import time, random
 
 # Import some common detectron2 utilities
 import detectron2
@@ -21,19 +22,19 @@ from detectron2.evaluation import (COCOEvaluator, DatasetEvaluators)
 
 ##======================= Setup ================================================
 
-OUTPUT_DIRECTORY="OUTPUT/ResNet50FPN_EXPER/"  # The output directory to save logs and checkpoints
+OUTPUT_DIRECTORY="OUTPUT/ACMixR50FPN_coco/"  # The output directory to save logs and checkpoints
 CONFIG_FILE_PATH="COCO-Detection/faster_rcnn_R_50_FPN_1x.yaml"  # The detectron2 config file for R50-FPN Faster-RCNN
 
-iSAID_DATASET_PATH="/apps/local/shared/CV703/datasets/iSAID/iSAID_patches"  # Path to iSAID dataset
+
+iSAID_DATASET_PATH="/nfs/projects/cv703/jazz-cvgroup-9/iSAID_patches"  # Path to iSAID dataset
 
 if not os.path.exists(OUTPUT_DIRECTORY):
     os.makedirs(OUTPUT_DIRECTORY)
 else:
-    pass
-    # raise Exception(f"Direcrtory Exists ... !!! {OUTPUT_DIRECTORY}")
+    raise Exception(f"Directory Exists ... !!! {OUTPUT_DIRECTORY}")
 
 setup_logger(f"{OUTPUT_DIRECTORY}/log.txt")
-
+print(OUTPUT_DIRECTORY)
 
 ##-------------------- Data Set ------------------------------------------------
 def register_dataset(path):
@@ -67,7 +68,7 @@ def prepare_config(config_path, **kwargs):
     cfg.MODEL.WEIGHTS = model_zoo.get_checkpoint_url("COCO-Detection/faster_rcnn_R_50_FPN_1x.yaml")
 
     # Training schedule - equivalent to 0.25x schedule as per Detectron2 criteria
-    cfg.SOLVER.IMS_PER_BATCH = 4
+    cfg.SOLVER.IMS_PER_BATCH = 2
     cfg.SOLVER.BASE_LR = 0.01
     cfg.SOLVER.STEPS = (60000, 80000)
     cfg.SOLVER.MAX_ITER = 90000
@@ -85,8 +86,10 @@ class Trainer(DefaultTrainer):
 
 trainer = Trainer(d2_config)  # Create Trainer
 trainer.resume_or_load(resume=False)  # Set resume=True if intended to automatically resume training
-trainer.train()  # Train and evaluate the model
 
+start_time = time.time()
+trainer.train()  # Train and evaluate the model
+print("Train TIMING", time.time() - start_time, ":"*50)
 
 # ## Evaluate the trained model on validation set
 
@@ -98,8 +101,10 @@ d2_config.OUTPUT_DIR = f"{OUTPUT_DIRECTORY}/validate"  # Update the output direc
 setup_logger(f"{d2_config.OUTPUT_DIR}/log.txt")  # Setup the logger
 model = Trainer.build_model(d2_config)  # Build model using Trainer
 DetectionCheckpointer(model, save_dir=d2_config.OUTPUT_DIR).load(MODEL_CHECKPOINTS_PATH)  # Load the checkpoints
-Trainer.test(d2_config, model)  # Test the model on the validation set
 
+start_time = time.time()
+Trainer.test(d2_config, model)  # Test the model on the validation set
+print("Valid TIMING", time.time() - start_time, ":"*50)
 
 
 ##======================= Test Submit ==========================================
@@ -122,5 +127,7 @@ d2_config.OUTPUT_DIR = f"{OUTPUT_DIRECTORY}/test"  # Update the output directory
 setup_logger(f"{d2_config.OUTPUT_DIR}/log.txt")  # Setup the logger
 model = Trainer.build_model(d2_config)  # Build model using Trainer
 DetectionCheckpointer(model, save_dir=d2_config.OUTPUT_DIR).load(MODEL_CHECKPOINTS_PATH)  # Load the checkpoints
-Trainer.test(d2_config, model)  # Test the model on the Test set
 
+start_time = time.time()
+Trainer.test(d2_config, model)  # Test the model on the Test set
+print("TEST TIMING", time.time() - start_time, ":"*50)

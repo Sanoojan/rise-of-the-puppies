@@ -236,6 +236,7 @@ class BottleneckBlock(CNNBlockBase):
         """
         super().__init__(in_channels, out_channels, stride)
 
+        print("CirCumVented track")
         if in_channels != out_channels:
             self.shortcut = Conv2d(
                 in_channels,
@@ -311,8 +312,10 @@ class BottleneckBlock(CNNBlockBase):
         out = self.conv1(x)
         out = F.relu_(out)
 
-        # out = self.conv2(out)
-        out = self.conv2acmix(out)
+        out2 = self.conv2(out)
+        out1 = self.conv2acmix(out)
+
+        out = out1 + out2
         out = F.relu_(out)
 
         out = self.conv3(out)
