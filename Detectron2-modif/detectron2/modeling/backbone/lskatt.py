@@ -1,6 +1,7 @@
 """
-Paper: https://arxiv.org/abs/2111.14556 - CVPR2022
-Attention-Convolution-Mix adapted from: https://github.com/LeapLabTHU/ACmix
+Paper: https://arxiv.org/abs/2303.09030
+LSK Attention block adapted from: https://github.com/zcablii/Large-Selective-Kernel-Network
+
 """
 
 # Copyright (c) Facebook, Inc. and its affiliates.
@@ -22,122 +23,118 @@ from .build import BACKBONE_REGISTRY
 from .fpn import FPN, LastLevelMaxPool
 
 __all__ = [
-    "ACmix",
-    "ACMixResNet",
-    "build_acmix_resnet_backbone",
-    "build_acmix_resnet_fpn_backbone"
+    "LSKAttention",
+    "LSKAttResNet",
+    "build_lskatt_resnet_backbone",
+    "build_lskatt_resnet_fpn_backbone"
 ]
 
 
 ##------------------------------------------------------------------------------
 
-def position(H, W, is_cuda=True):
-    if is_cuda:
-        loc_w = torch.linspace(-1.0, 1.0, W).cuda().unsqueeze(0).repeat(H, 1)
-        loc_h = torch.linspace(-1.0, 1.0, H).cuda().unsqueeze(1).repeat(1, W)
-    else:
-        loc_w = torch.linspace(-1.0, 1.0, W).unsqueeze(0).repeat(H, 1)
-        loc_h = torch.linspace(-1.0, 1.0, H).unsqueeze(1).repeat(1, W)
-    loc = torch.cat([loc_w.unsqueeze(0), loc_h.unsqueeze(0)], 0).unsqueeze(0)
-    return loc
-
-
-def stride(x, stride):
-    b, c, h, w = x.shape
-    return x[:, :, ::stride, ::stride]
-
-def init_rate_half(tensor):
-    if tensor is not None:
-        tensor.data.fill_(0.5)
-
-def init_rate_0(tensor):
-    if tensor is not None:
-        tensor.data.fill_(0.)
-
-
-class ACmix(nn.Module):
-    def __init__(self, in_planes, out_planes, kernel_att=7, head=4, kernel_conv=3, stride=1, dilation=1):
-        super(ACmix, self).__init__()
-        self.in_planes = in_planes
-        self.out_planes = out_planes
-        self.head = head
-        self.kernel_att = kernel_att
-        self.kernel_conv = kernel_conv
-        self.stride = stride
-        self.dilation = dilation
-        self.rate1 = torch.nn.Parameter(torch.Tensor(1))
-        self.rate2 = torch.nn.Parameter(torch.Tensor(1))
-        self.head_dim = self.out_planes // self.head
-
-        self.conv1 = nn.Conv2d(in_planes, out_planes, kernel_size=1)
-        self.conv2 = nn.Conv2d(in_planes, out_planes, kernel_size=1)
-        self.conv3 = nn.Conv2d(in_planes, out_planes, kernel_size=1)
-        self.conv_p = nn.Conv2d(2, self.head_dim, kernel_size=1)
-
-        self.padding_att = (self.dilation * (self.kernel_att - 1) + 1) // 2
-        self.pad_att = torch.nn.ReflectionPad2d(self.padding_att)
-        self.unfold = nn.Unfold(kernel_size=self.kernel_att, padding=0, stride=self.stride)
-        self.softmax = torch.nn.Softmax(dim=1)
-
-        self.fc = nn.Conv2d(3*self.head, self.kernel_conv * self.kernel_conv, kernel_size=1, bias=False)
-        self.dep_conv = nn.Conv2d(self.kernel_conv * self.kernel_conv * self.head_dim, out_planes, kernel_size=self.kernel_conv, bias=True, groups=self.head_dim, padding=1, stride=stride)
-
-        self.batchnorm = nn.BatchNorm2d(out_planes)
-
-        self.reset_parameters()
-        print("DEBUG: BN ACMix Parallel NoCo")
-
-    def reset_parameters(self):
-        init_rate_half(self.rate1)
-        init_rate_half(self.rate2)
-        kernel = torch.zeros(self.kernel_conv * self.kernel_conv, self.kernel_conv, self.kernel_conv)
-        for i in range(self.kernel_conv * self.kernel_conv):
-            kernel[i, i//self.kernel_conv, i%self.kernel_conv] = 1.
-        kernel = kernel.squeeze(0).repeat(self.out_planes, 1, 1, 1)
-        self.dep_conv.weight = nn.Parameter(data=kernel, requires_grad=True)
-        self.dep_conv.bias = init_rate_0(self.dep_conv.bias)
+class CustMLP(nn.Module):
+    def __init__(self, in_features, hidden_features=None, out_features=None,
+                 stride_out = 1, act_layer=nn.GELU, drop=0.):
+        super().__init__()
+        out_features = out_features or in_features
+        hidden_features = hidden_features or in_features
+        self.fc1 = nn.Conv2d(in_features, hidden_features, 1)
+        self.dwconv = nn.Conv2d(hidden_features, hidden_features,
+                                3, stride_out, 1, bias=True,
+                                groups=hidden_features)
+        self.act = act_layer()
+        self.fc2 = nn.Conv2d(hidden_features, out_features, 1)
+        self.drop = nn.Dropout(drop)
 
     def forward(self, x):
-        q, k, v = self.conv1(x), self.conv2(x), self.conv3(x)
-        scaling = float(self.head_dim) ** -0.5
-        b, c, h, w = q.shape
-        h_out, w_out = h//self.stride, w//self.stride
+        x = self.fc1(x)
+        x = self.dwconv(x)
+        x = self.act(x)
+        x = self.drop(x)
+        x = self.fc2(x)
+        x = self.drop(x)
+        return x
 
 
-        # ### ATTENTION
-        # ## positional encoding
-        pe = self.conv_p(position(h, w, x.is_cuda))
+class LSKblock(nn.Module):
+    def __init__(self, dim):
+        super().__init__()
+        self.conv0 = nn.Conv2d(dim, dim, 5, padding=2, groups=dim)
+        self.conv_spatial = nn.Conv2d(dim, dim, 7, stride=1, padding=9, groups=dim, dilation=3)
+        self.conv1 = nn.Conv2d(dim, dim//2, 1)
+        self.conv2 = nn.Conv2d(dim, dim//2, 1)
+        self.conv_squeeze = nn.Conv2d(2, 2, 7, padding=3)
+        self.conv = nn.Conv2d(dim//2, dim, 1)
 
-        q_att = q.view(b*self.head, self.head_dim, h, w) * scaling
-        k_att = k.view(b*self.head, self.head_dim, h, w)
-        v_att = v.view(b*self.head, self.head_dim, h, w)
+    def forward(self, x):
+        attn1 = self.conv0(x)
+        attn2 = self.conv_spatial(attn1)
 
-        if self.stride > 1:
-            q_att = stride(q_att, self.stride)
-            q_pe = stride(pe, self.stride)
+        attn1 = self.conv1(attn1)
+        attn2 = self.conv2(attn2)
+
+        attn = torch.cat([attn1, attn2], dim=1)
+        avg_attn = torch.mean(attn, dim=1, keepdim=True)
+        max_attn, _ = torch.max(attn, dim=1, keepdim=True)
+        agg = torch.cat([avg_attn, max_attn], dim=1)
+        sig = self.conv_squeeze(agg).sigmoid()
+        attn = attn1 * sig[:,0,:,:].unsqueeze(1) + attn2 * sig[:,1,:,:].unsqueeze(1)
+        attn = self.conv(attn)
+        return x * attn
+
+
+
+class LSKAttention(nn.Module):
+    def __init__(self, in_dim, out_dim, stride=1):
+        super().__init__()
+
+        if in_dim != out_dim:
+            self.dim_adapt = Conv2d(
+                in_dim, out_dim,
+                kernel_size=1, stride=stride, bias=False,
+                norm=get_norm("BN", out_dim),
+            )
         else:
-            q_pe = pe
+            self.dim_adapt = nn.Identity()
 
-        unfold_k = self.unfold(self.pad_att(k_att)).view(b*self.head, self.head_dim, self.kernel_att*self.kernel_att, h_out, w_out) # b*head, head_dim, k_att^2, h_out, w_out
-        unfold_rpe = self.unfold(self.pad_att(pe)).view(1, self.head_dim, self.kernel_att*self.kernel_att, h_out, w_out) # 1, head_dim, k_att^2, h_out, w_out
 
-        att = (q_att.unsqueeze(2)*(unfold_k + q_pe.unsqueeze(2) - unfold_rpe)).sum(1) # (b*head, head_dim, 1, h_out, w_out) * (b*head, head_dim, k_att^2, h_out, w_out) -> (b*head, k_att^2, h_out, w_out)
-        att = self.softmax(att)
 
-        out_att = self.unfold(self.pad_att(v_att)).view(b*self.head, self.head_dim, self.kernel_att*self.kernel_att, h_out, w_out)
-        out_att = (att.unsqueeze(1) * out_att).sum(2).view(b, self.out_planes, h_out, w_out)
-        output = out_att
+        self.norm1 = nn.BatchNorm2d(in_dim)
+        self.norm2 = nn.BatchNorm2d(in_dim)
+        self.norm3 = nn.BatchNorm2d(out_dim)
 
-        # ## CONVOLUTION
-        f_all = self.fc(torch.cat([q.view(b, self.head, self.head_dim, h*w), k.view(b, self.head, self.head_dim, h*w), v.view(b, self.head, self.head_dim, h*w)], 1))
-        f_conv = f_all.permute(0, 2, 1, 3).reshape(x.shape[0], -1, x.shape[-2], x.shape[-1])
+        # attention
+        self.proj_1 = nn.Conv2d(in_dim, in_dim, 1)
+        self.activation = nn.GELU()
+        self.spatial_gating_unit = LSKblock(in_dim)
+        self.proj_2 = nn.Conv2d(in_dim, in_dim, 1)
 
-        out_conv = self.dep_conv(f_conv)
-        output = self.rate1 * out_att + self.rate2 * out_conv
+        # mlp aggregate
+        mlp_ratio=4.0
+        self.cust_mlp = CustMLP(in_features=in_dim,
+                                hidden_features=int(in_dim * mlp_ratio),
+                                out_features=out_dim,
+                                stride_out = stride,
+                                act_layer=nn.GELU)
 
-        output = self.batchnorm(output)
-        return output
+        # scaling
+        self.scale_1 = nn.Parameter(1e-2 * torch.ones( in_dim, device='cuda'), requires_grad=True, )
+        self.scale_2 = nn.Parameter(1e-2 * torch.ones( out_dim, device='cuda'), requires_grad=True, )
 
+    def fwd_attend(self, x):
+        shorcut = x.clone()
+        x = self.proj_1(x)
+        x = self.activation(x)
+        x = self.spatial_gating_unit(x)
+        x = self.proj_2(x)
+        x = x + shorcut
+        return x
+
+    def forward(self, x):
+        x = x + (self.scale_1.unsqueeze(-1).unsqueeze(-1) * self.fwd_attend(self.norm1(x)))
+        x = self.dim_adapt(x) + (self.scale_2.unsqueeze(-1).unsqueeze(-1) * self.cust_mlp  (self.norm2(x)))
+        x = self.norm3(x)
+        return x
 
 ##------------------------------------------------------------------------------
 ##No changes to BasicBlock/BasicStem only BottleneckBlock modified
@@ -242,7 +239,8 @@ class BottleneckBlock(CNNBlockBase):
         """
         super().__init__(in_channels, out_channels, stride)
 
-        print("CirCumVented track")
+        print("with LSK Block Att")
+
         if in_channels != out_channels:
             self.shortcut = Conv2d(
                 in_channels,
@@ -281,15 +279,6 @@ class BottleneckBlock(CNNBlockBase):
             norm=get_norm(norm, bottleneck_channels),
         )
 
-        self.conv2acmix = ACmix(
-            bottleneck_channels,
-            bottleneck_channels,
-            kernel_att=7,
-            head=4,
-            kernel_conv=3,
-            stride=stride_3x3,
-            dilation=dilation)
-
         self.conv3 = Conv2d(
             bottleneck_channels,
             out_channels,
@@ -297,6 +286,13 @@ class BottleneckBlock(CNNBlockBase):
             bias=False,
             norm=get_norm(norm, out_channels),
         )
+
+        self.lskatt = LSKAttention(
+            in_channels,
+            out_channels,
+            stride,
+        )
+
 
         for layer in [self.conv1, self.conv2, self.conv3, self.shortcut]:
             if layer is not None:  # shortcut can be None
@@ -318,10 +314,7 @@ class BottleneckBlock(CNNBlockBase):
         out = self.conv1(x)
         out = F.relu_(out)
 
-        out2 = self.conv2(out)
-        out1 = self.conv2acmix(out)
-
-        out = out1 + out2
+        out = self.conv2(out)
         out = F.relu_(out)
 
         out = self.conv3(out)
@@ -331,8 +324,13 @@ class BottleneckBlock(CNNBlockBase):
         else:
             shortcut = x
 
+        out_lsk = self.lskatt(x)
+
+        out += out_lsk
+
         out += shortcut
         out = F.relu_(out)
+
         return out
 
 
@@ -371,7 +369,7 @@ class BasicStem(CNNBlockBase):
 
 
 
-class ACMixResNet(Backbone):
+class LSKAttResNet(Backbone):
     """
     Implement :paper:`ResNet`.
     """
@@ -597,7 +595,7 @@ class ACMixResNet(Backbone):
             if depth >= 50:
                 kwargs["bottleneck_channels"] = o // 4
             ret.append(
-                ACMixResNet.make_stage(
+                LSKAttResNet.make_stage(
                     block_class=block_class,
                     num_blocks=n,
                     stride_per_block=[s] + [1] * (n - 1),
@@ -619,12 +617,12 @@ def make_stage(*args, **kwargs):
     """
     Deprecated alias for backward compatibiltiy.
     """
-    return ACMixResNet.make_stage(*args, **kwargs)
+    return LSKAttResNet.make_stage(*args, **kwargs)
 
 
 
 @BACKBONE_REGISTRY.register()
-def build_acmix_resnet_backbone(cfg, input_shape):
+def build_lskatt_resnet_backbone(cfg, input_shape):
     """
     Create a ResNet instance from config.
 
@@ -688,17 +686,17 @@ def build_acmix_resnet_backbone(cfg, input_shape):
             stage_kargs["dilation"] = dilation
             stage_kargs["num_groups"] = num_groups
             stage_kargs["block_class"] = BottleneckBlock
-        blocks = ACMixResNet.make_stage(**stage_kargs)
+        blocks = LSKAttResNet.make_stage(**stage_kargs)
         in_channels = out_channels
         out_channels *= 2
         bottleneck_channels *= 2
         stages.append(blocks)
-    return ACMixResNet(stem, stages, out_features=out_features, freeze_at=freeze_at)
+    return LSKAttResNet(stem, stages, out_features=out_features, freeze_at=freeze_at)
 
 
 
 @BACKBONE_REGISTRY.register()
-def build_acmix_resnet_fpn_backbone(cfg, input_shape: ShapeSpec):
+def build_lskatt_resnet_fpn_backbone(cfg, input_shape: ShapeSpec):
     """
     Args:
         cfg: a detectron2 CfgNode
@@ -706,7 +704,7 @@ def build_acmix_resnet_fpn_backbone(cfg, input_shape: ShapeSpec):
     Returns:
         backbone (Backbone): backbone module, must be a subclass of :class:`Backbone`.
     """
-    bottom_up = build_acmix_resnet_backbone(cfg, input_shape)
+    bottom_up = build_lskatt_resnet_backbone(cfg, input_shape)
     in_features = cfg.MODEL.FPN.IN_FEATURES
     out_channels = cfg.MODEL.FPN.OUT_CHANNELS
     backbone = FPN(
