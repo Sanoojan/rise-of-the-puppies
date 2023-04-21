@@ -82,8 +82,10 @@ class ACmix(nn.Module):
         self.fc = nn.Conv2d(3*self.head, self.kernel_conv * self.kernel_conv, kernel_size=1, bias=False)
         self.dep_conv = nn.Conv2d(self.kernel_conv * self.kernel_conv * self.head_dim, out_planes, kernel_size=self.kernel_conv, bias=True, groups=self.head_dim, padding=1, stride=stride)
 
+        self.batchnorm = nn.BatchNorm2d(out_planes)
+
         self.reset_parameters()
-        print("DEBUG: ACMix")
+        print("DEBUG: BN ACMix Parallel NoCo")
 
     def reset_parameters(self):
         init_rate_half(self.rate1)
@@ -124,14 +126,18 @@ class ACmix(nn.Module):
 
         out_att = self.unfold(self.pad_att(v_att)).view(b*self.head, self.head_dim, self.kernel_att*self.kernel_att, h_out, w_out)
         out_att = (att.unsqueeze(1) * out_att).sum(2).view(b, self.out_planes, h_out, w_out)
+        output = out_att
 
         # ## CONVOLUTION
         f_all = self.fc(torch.cat([q.view(b, self.head, self.head_dim, h*w), k.view(b, self.head, self.head_dim, h*w), v.view(b, self.head, self.head_dim, h*w)], 1))
         f_conv = f_all.permute(0, 2, 1, 3).reshape(x.shape[0], -1, x.shape[-2], x.shape[-1])
 
         out_conv = self.dep_conv(f_conv)
+        output = self.rate1 * out_att + self.rate2 * out_conv
 
-        return self.rate1 * out_att + self.rate2 * out_conv
+        output = self.batchnorm(output)
+        return output
+
 
 ##------------------------------------------------------------------------------
 
