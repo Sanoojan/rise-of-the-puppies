@@ -23,6 +23,8 @@ from detectron2.evaluation import (COCOEvaluator, DatasetEvaluators)
 ##======================= Setup ================================================
 
 OUTPUT_DIRECTORY="OUTPUT/ACMixR50FPN_coco/"  # The output directory to save logs and checkpoints
+
+RESUME = False
 CONFIG_FILE_PATH="COCO-Detection/faster_rcnn_R_50_FPN_1x.yaml"  # The detectron2 config file for R50-FPN Faster-RCNN
 
 
@@ -30,6 +32,8 @@ iSAID_DATASET_PATH="/nfs/projects/cv703/jazz-cvgroup-9/iSAID_patches"  # Path to
 
 if not os.path.exists(OUTPUT_DIRECTORY):
     os.makedirs(OUTPUT_DIRECTORY)
+elif RESUME:
+    pass
 else:
     raise Exception(f"Directory Exists ... !!! {OUTPUT_DIRECTORY}")
 
@@ -85,7 +89,7 @@ class Trainer(DefaultTrainer):
         return DatasetEvaluators([COCOEvaluator(dataset_name, output_dir=cfg.OUTPUT_DIR)])
 
 trainer = Trainer(d2_config)  # Create Trainer
-trainer.resume_or_load(resume=False)  # Set resume=True if intended to automatically resume training
+trainer.resume_or_load(resume=RESUME)  # Set resume=True if intended to automatically resume training
 
 start_time = time.time()
 trainer.train()  # Train and evaluate the model
