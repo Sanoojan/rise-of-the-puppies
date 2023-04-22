@@ -50,6 +50,10 @@ def init_rate_half(tensor):
     if tensor is not None:
         tensor.data.fill_(0.5)
 
+def init_rate_small(tensor):
+    if tensor is not None:
+        tensor.data.fill_(1e-2)
+
 def init_rate_0(tensor):
     if tensor is not None:
         tensor.data.fill_(0.)
@@ -83,21 +87,21 @@ class ACmix(nn.Module):
         self.fc = nn.Conv2d(3*self.head, self.kernel_conv * self.kernel_conv, kernel_size=1, bias=False)
         self.dep_conv = nn.Conv2d(self.kernel_conv * self.kernel_conv * self.head_dim, out_planes, kernel_size=self.kernel_conv, bias=True, groups=self.head_dim, padding=1, stride=stride)
 
-        bn_planes = adapt_out_planes if adapt_out_planes else out_planes
-        self.batchnorm = nn.BatchNorm2d(bn_planes)
+        # bn_planes = adapt_out_planes if adapt_out_planes else out_planes
+        # self.batchnorm = nn.BatchNorm2d(bn_planes)
 
-        if adapt_out_planes: # work around for memory saving
-            self.dim_adapt = Conv2d( out_planes, adapt_out_planes,
-                kernel_size=1, stride=1, bias=False,)
-        else:
-            self.dim_adapt = nn.Identity()
+        # if adapt_out_planes: # work around for memory saving
+        #     self.dim_adapt = Conv2d( out_planes, adapt_out_planes,
+        #         kernel_size=1, stride=1, bias=False,)
+        # else:
+        #     self.dim_adapt = nn.Identity()
 
         self.reset_parameters()
-        print("DEBUG: ACMix at ")
+        print("DEBUG: ACMix at Stage level")
 
     def reset_parameters(self):
-        init_rate_half(self.rate1)
-        init_rate_half(self.rate2)
+        init_rate_small(self.rate1)
+        init_rate_small(self.rate2)
         kernel = torch.zeros(self.kernel_conv * self.kernel_conv, self.kernel_conv, self.kernel_conv)
         for i in range(self.kernel_conv * self.kernel_conv):
             kernel[i, i//self.kernel_conv, i%self.kernel_conv] = 1.
@@ -134,7 +138,6 @@ class ACmix(nn.Module):
 
         out_att = self.unfold(self.pad_att(v_att)).view(b*self.head, self.head_dim, self.kernel_att*self.kernel_att, h_out, w_out)
         out_att = (att.unsqueeze(1) * out_att).sum(2).view(b, self.out_planes, h_out, w_out)
-        output = out_att
 
         # ## CONVOLUTION
         f_all = self.fc(torch.cat([q.view(b, self.head, self.head_dim, h*w), k.view(b, self.head, self.head_dim, h*w), v.view(b, self.head, self.head_dim, h*w)], 1))
@@ -142,9 +145,9 @@ class ACmix(nn.Module):
 
         out_conv = self.dep_conv(f_conv)
         output = self.rate1 * out_att + self.rate2 * out_conv
+        # output = self.dim_adapt(output)
 
-        output = self.dim_adapt(output)
-        output = self.batchnorm(output)
+        # output = self.batchnorm(output)
         return output
 
 
@@ -251,7 +254,6 @@ class BottleneckBlock(CNNBlockBase):
         """
         super().__init__(in_channels, out_channels, stride)
 
-        print("CirCumVented track")
         if in_channels != out_channels:
             self.shortcut = Conv2d(
                 in_channels,
@@ -395,7 +397,7 @@ class ACMixResNet(Backbone):
     Implement :paper:`ResNet`.
     """
 
-    def __init__(self, stem, stages, num_classes=None, out_features=None, freeze_at=0):
+    def __init__(self, stem, stages, co_stages, num_classes=None, out_features=None, freeze_at=0):
         """
         Args:
             stem (nn.Module): a stem module
@@ -417,6 +419,7 @@ class ACMixResNet(Backbone):
         self._out_feature_strides = {"stem": current_stride}
         self._out_feature_channels = {"stem": self.stem.out_channels}
 
+        self.co_stages = nn.ModuleList(co_stages)
         self.stage_names, self.stages = [], []
 
         if out_features is not None:
@@ -476,8 +479,10 @@ class ACMixResNet(Backbone):
         x = self.stem(x)
         if "stem" in self._out_features:
             outputs["stem"] = x
-        for name, stage in zip(self.stage_names, self.stages):
-            x = stage(x)
+        for name, stage, co_stage in zip(self.stage_names, self.stages, self.co_stages):
+            xs = stage(x)
+            xc = co_stage(x) if co_stage else 0
+            x = xs+xc
             if name in self._out_features:
                 outputs[name] = x
         if self.num_classes is not None:
@@ -686,6 +691,7 @@ def build_acmix_resnet_backbone(cfg, input_shape):
         assert num_groups == 1, "Must set MODEL.RESNETS.NUM_GROUPS = 1 for R18/R34"
 
     stages = []
+    co_stages = []
 
     for idx, stage_idx in enumerate(range(2, 6)):
         # res5_dilation is used this way as a convention in R-FCN & Deformable Conv paper
@@ -707,12 +713,20 @@ def build_acmix_resnet_backbone(cfg, input_shape):
             stage_kargs["dilation"] = dilation
             stage_kargs["num_groups"] = num_groups
             stage_kargs["block_class"] = BottleneckBlock
-        blocks = ACMixResNet.make_stage(**stage_kargs)
+        blocks = ACMixResNet.make_stage(**stage_kargs) #makes regular resnet Blocks
+        co_stage = ACmix( #set None to disable
+            in_planes=in_channels,
+            out_planes=out_channels,
+            stride=first_stride, #rest are set as 1 in resnet Blocks
+        )
+
         in_channels = out_channels
         out_channels *= 2
         bottleneck_channels *= 2
         stages.append(blocks)
-    return ACMixResNet(stem, stages, out_features=out_features, freeze_at=freeze_at)
+        co_stages.append(co_stage)
+
+    return ACMixResNet(stem, stages, co_stages, out_features=out_features, freeze_at=freeze_at)
 
 
 
