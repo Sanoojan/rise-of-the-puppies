@@ -56,7 +56,8 @@ def init_rate_0(tensor):
 
 
 class ACmix(nn.Module):
-    def __init__(self, in_planes, out_planes, kernel_att=7, head=4, kernel_conv=3, stride=1, dilation=1):
+    def __init__(self, in_planes, out_planes, adapt_out_planes = None,
+                kernel_att=7, head=4, kernel_conv=3, stride=1, dilation=1):
         super(ACmix, self).__init__()
         self.in_planes = in_planes
         self.out_planes = out_planes
@@ -82,10 +83,17 @@ class ACmix(nn.Module):
         self.fc = nn.Conv2d(3*self.head, self.kernel_conv * self.kernel_conv, kernel_size=1, bias=False)
         self.dep_conv = nn.Conv2d(self.kernel_conv * self.kernel_conv * self.head_dim, out_planes, kernel_size=self.kernel_conv, bias=True, groups=self.head_dim, padding=1, stride=stride)
 
-        self.batchnorm = nn.BatchNorm2d(out_planes)
+        bn_planes = adapt_out_planes if adapt_out_planes else out_planes
+        self.batchnorm = nn.BatchNorm2d(bn_planes)
+
+        if adapt_out_planes: # work around for memory saving
+            self.dim_adapt = Conv2d( out_planes, adapt_out_planes,
+                kernel_size=1, stride=1, bias=False,)
+        else:
+            self.dim_adapt = nn.Identity()
 
         self.reset_parameters()
-        print("DEBUG: BN ACMix Parallel NoCo")
+        print("DEBUG: ACMix at ")
 
     def reset_parameters(self):
         init_rate_half(self.rate1)
@@ -135,6 +143,7 @@ class ACmix(nn.Module):
         out_conv = self.dep_conv(f_conv)
         output = self.rate1 * out_att + self.rate2 * out_conv
 
+        output = self.dim_adapt(output)
         output = self.batchnorm(output)
         return output
 
@@ -281,15 +290,6 @@ class BottleneckBlock(CNNBlockBase):
             norm=get_norm(norm, bottleneck_channels),
         )
 
-        self.conv2acmix = ACmix(
-            bottleneck_channels,
-            bottleneck_channels,
-            kernel_att=7,
-            head=4,
-            kernel_conv=3,
-            stride=stride_3x3,
-            dilation=dilation)
-
         self.conv3 = Conv2d(
             bottleneck_channels,
             out_channels,
@@ -297,6 +297,25 @@ class BottleneckBlock(CNNBlockBase):
             bias=False,
             norm=get_norm(norm, out_channels),
         )
+
+        # self.conv2acmix = ACmix(
+        #     bottleneck_channels,
+        #     bottleneck_channels,
+        #     kernel_att=7,
+        #     head=4,
+        #     kernel_conv=3,
+        #     stride=stride_3x3,
+        #     dilation=dilation)
+
+        # self.acmix = ACmix(
+        #     in_channels,
+        #     in_channels,
+        #     out_channels,
+        #     kernel_att=7,
+        #     head=4,
+        #     kernel_conv=3,
+        #     stride=1,
+        #     dilation=dilation)
 
         for layer in [self.conv1, self.conv2, self.conv3, self.shortcut]:
             if layer is not None:  # shortcut can be None
@@ -318,10 +337,7 @@ class BottleneckBlock(CNNBlockBase):
         out = self.conv1(x)
         out = F.relu_(out)
 
-        out2 = self.conv2(out)
-        out1 = self.conv2acmix(out)
-
-        out = out1 + out2
+        out = self.conv2(out)
         out = F.relu_(out)
 
         out = self.conv3(out)
@@ -330,6 +346,9 @@ class BottleneckBlock(CNNBlockBase):
             shortcut = self.shortcut(x)
         else:
             shortcut = x
+
+        # out_acm = self.acmix(out)
+        # out += out_acm
 
         out += shortcut
         out = F.relu_(out)
