@@ -35,6 +35,7 @@ from detectron2.evaluation import (COCOEvaluator, DatasetEvaluators)
 OUTPUT_DIRECTORY="OUTPUT/#DUMMY/Ex20-ViTDet_attempt/"
 
 WEIGHT_TO_LOAD="/home/joseph.benjamin/LABS/cv703/project-work/Model-Backups/ViTDetB-model_final_61ccd1.pkl"
+RESUME= False
 
 iSAID_DATASET_PATH="/apps/local/shared/CV703/datasets/iSAID/iSAID_patches/"
 
@@ -90,6 +91,8 @@ dataloader.evaluator = L(COCOEvaluator)(
 
 
 model = model_zoo.get_config("common/models/mask_rcnn_vitdet.py").model
+model.roi_heads.num_classes = 15
+model.roi_heads.box_predictor.test_topk_per_image=300
 
 # Initialization and trainer settings
 train = model_zoo.get_config("common/train.py").train
@@ -104,6 +107,8 @@ train.output_dir = OUTPUT_DIRECTORY
 # Schedule
 # 100 ep = 184375 iters * 64 images/iter / 118000 images/ep
 train.max_iter = 90000
+train.resume=True
+
 
 lr_multiplier = L(WarmupParamScheduler)(
     scheduler=L(MultiStepParamScheduler)(
