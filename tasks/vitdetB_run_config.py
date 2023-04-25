@@ -107,7 +107,7 @@ train.output_dir = OUTPUT_DIRECTORY
 # Schedule
 # 100 ep = 184375 iters * 64 images/iter / 118000 images/ep
 train.max_iter = 90000
-train.resume=True
+train.resume=RESUME
 
 
 lr_multiplier = L(WarmupParamScheduler)(
