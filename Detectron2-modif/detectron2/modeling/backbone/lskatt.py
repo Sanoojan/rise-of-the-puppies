@@ -97,8 +97,6 @@ class LSKAttention(nn.Module):
         else:
             self.dim_adapt = nn.Identity()
 
-
-
         self.norm1 = nn.BatchNorm2d(in_dim)
         self.norm2 = nn.BatchNorm2d(in_dim)
         self.norm3 = nn.BatchNorm2d(out_dim)
@@ -293,6 +291,10 @@ class BottleneckBlock(CNNBlockBase):
             stride,
         )
 
+        # self.lskblk = LSKblock(
+        #     bottleneck_channels
+        # )
+
 
         for layer in [self.conv1, self.conv2, self.conv3, self.shortcut]:
             if layer is not None:  # shortcut can be None
@@ -325,7 +327,6 @@ class BottleneckBlock(CNNBlockBase):
             shortcut = x
 
         out_lsk = self.lskatt(x)
-
         out += out_lsk
 
         out += shortcut
