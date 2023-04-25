@@ -5,8 +5,9 @@ python -W ignore Detectron2-modif/tools/lazyconfig_train_net.py \
 
 # TO EVALUATE
 python -W ignore Detectron2-modif/tools/lazyconfig_train_net.py \
-    --config-file configs/path/to/config.py \
-        --eval-only train.init_checkpoint=/path/to/model_checkpoint
+    --config-file tasks/vitdetB_run_config.py  \
+    --eval-only train.init_checkpoint=/path/to/model_final.pth \
+    dataloader.test.dataset.names="iSAID_test"
 
 """
 
@@ -83,8 +84,10 @@ dataloader.train.sampler = L(RepeatFactorTrainingSampler)(
     )
 )
 dataloader.test.dataset.names = "iSAID_val"
+print("Evaluation on", dataloader.test.dataset.names)
 dataloader.evaluator = L(COCOEvaluator)(
     dataset_name="${..test.dataset.names}",
+    output_dir=OUTPUT_DIRECTORY+"/"+dataloader.test.dataset.names,
     max_dets_per_image=300,
 )
 
