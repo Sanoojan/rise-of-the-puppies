@@ -6,6 +6,8 @@ import torch.nn as nn
 
 from detectron2.layers import CNNBlockBase, Conv2d, get_norm
 from detectron2.modeling.backbone.fpn import _assert_strides_are_log2_contiguous
+from detectron2.modeling.backbone.tome.merge import bipartite_soft_matching, merge_source, merge_wavg
+from detectron2.modeling.backbone.tome.utils import parse_r
 
 from .backbone import Backbone
 from .utils import (
@@ -21,7 +23,7 @@ logger = logging.getLogger(__name__)
 
 __all__ = ["ViT", "SimpleFeaturePyramid", "get_vit_lr_decay_rate"]
 
-
+TOME=True
 class Attention(nn.Module):
     """Multi-head Attention block with relative position embeddings."""
 
@@ -78,7 +80,7 @@ class Attention(nn.Module):
         x = (attn @ v).view(B, self.num_heads, H, W, -1).permute(0, 2, 3, 1, 4).reshape(B, H, W, -1)
         x = self.proj(x)
 
-        return x
+        return x,k.mean(dim=1)
 
 
 class ResBottleneckBlock(CNNBlockBase):
@@ -206,6 +208,15 @@ class Block(nn.Module):
                 norm="LN",
                 act_layer=act_layer,
             )
+        self._tome_info = {
+            "r": [32],
+            "size": None,
+            "source": None,
+            "trace_source": True,
+            "prop_attn": True,
+            "class_token": False,
+            "distill_token": False,
+        }
 
     def forward(self, x):
         shortcut = x
@@ -215,12 +226,30 @@ class Block(nn.Module):
             H, W = x.shape[1], x.shape[2]
             x, pad_hw = window_partition(x, self.window_size)
 
-        x = self.attn(x)
+        x,metric = self.attn(x)
         # Reverse window partition
         if self.window_size > 0:
             x = window_unpartition(x, self.window_size, pad_hw, (H, W))
 
         x = shortcut + self.drop_path(x)
+        
+        if TOME:
+            r=32
+            if r > 0:
+                # Apply ToMe here
+                merge, _ = bipartite_soft_matching(
+                    metric,
+                    r,
+                    self._tome_info["class_token"],
+                    self._tome_info["distill_token"],
+                )
+                if self._tome_info["trace_source"]:
+                    self._tome_info["source"] = merge_source(
+                        merge, x, self._tome_info["source"]
+                    )
+                x, self._tome_info["size"] = merge_wavg(merge, x, self._tome_info["size"])
+        
+        
         x = x + self.drop_path(self.mlp(self.norm2(x)))
 
         if self.use_residual_block:
